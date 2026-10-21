@@ -5,7 +5,7 @@ description: Use when user invokes /transfer (or says "offload this to mini", "m
 
 # Transfer — move the current task to another machine
 
-Stop working here and continue the task on the Mac mini (`ssh mini`). By default the **same conversation** continues there: the project goes to the same absolute path, this session's transcript goes along, and the remote runs `claude --resume <session-id>`. The full history, memory and session id all travel, and Remote Control (`/rc`) stays attached. The heavy lifting is `transfer.sh` next to this file. Your job is to stop cleanly, write the handoff, run the script, and report.
+Stop working here and continue the task on the Mac mini (`ssh mini`). By default the **same conversation** continues there: the project goes to the same absolute path, this session's transcript goes along, and the remote runs `claude --resume <session-id>`. The full history, memory and session id all travel, and the remote attaches to the **same** Remote Control entry (same `cse_…` id) — see step 6. The heavy lifting is `transfer.sh` next to this file. Your job is to stop cleanly, write the handoff, run the script, and report.
 
 ## Arguments
 
@@ -97,7 +97,7 @@ The script:
 ### 6. Report and stop
 Brief, in the user's language:
 - the mode (and `REASON` if it fell back), the remote dir, the tmux session, and `STATE`
-- attach: the `ATTACH` line (detach with `Ctrl-b d`). In resume mode the user can also follow through Remote Control.
+- attach: the `ATTACH` line (detach with `Ctrl-b d`). In resume mode the user can also follow through Remote Control, but the RC list shows **one** entry (same title, same `cse_…` id) that both machines' processes are bridged to, and the local one keeps answering it. Tell the user to `/exit` the local session right after the transfer so the RC entry is driven by the remote only. Verify with `jq '.replBridgePlaceholders' ~/.claude.json` on both ends (same cse id, different pids). On the remote, `/rc` in the autocomplete reads "Disconnect Remote Control" when it is already connected, so don't press Enter there.
 - getting work back: `git fetch <host>:<DEST> <branch>:<branch>` once the remote commits. In resume mode, the `PULLBACK` line brings the remote transcript and memory back, so the conversation can later be resumed here.
 - the local working tree is left untouched. **Don't keep using this session locally after a resume-mode transfer**: both machines now hold the same session id, so they would fork.
 

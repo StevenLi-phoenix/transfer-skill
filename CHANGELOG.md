@@ -2,6 +2,10 @@
 
 All notable changes to this skill are documented here. Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.1.1] - 2026-10-21
+### Fixed
+- SKILL.md: Remote Control after a resume-mode transfer. The remote joins the same RC entry (same `cse_…` id) as the local process, so the user must `/exit` the local session for RC to reach the remote. Documented how to verify this and how to avoid the Disconnect trap.
+
 ## [1.1.0] - 2026-10-21
 ### Added
 - `-M <model>` / `-E <effort>` (`/transfer --model`, `--effort`): launch the remote session with a specific model and effort level; both are validated before anything is sent.

@@ -334,7 +334,7 @@ ssh "$HOST" "mkdir -p $(q "$RSLUG")"
 if [[ -n $SLUG_DIR && -d $SLUG_DIR/memory ]]; then
   if [[ $KIND == resume || $KIND == sync ]]; then
     # same slug on both ends: pull remote-only/newer memory home first, so this is a two-way sync
-    PULLED=$(rsync -a --update --itemize-changes "$HOST:$(q "$RSLUG/memory")/" "$SLUG_DIR/memory/" 2>/dev/null | grep '^>f' | cut -c13- || true)
+    PULLED=$(rsync -a --update --itemize-changes "$HOST:$(q "$RSLUG/memory")/" "$SLUG_DIR/memory/" 2>/dev/null | awk '/^>f/ {print $2}' || true)
     [[ -n $PULLED ]] && log "memory pulled from $HOST (newer there): $(tr '\n' ' ' <<<"$PULLED")"
   fi
   # --update: never clobber memory files that are newer on the remote

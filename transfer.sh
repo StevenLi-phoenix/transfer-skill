@@ -2,7 +2,8 @@
 # transfer.sh — move the current Claude Code task to a remote host and keep it running
 # there inside tmux.
 #
-# usage: transfer.sh [-H host] [-m mode] [-b] [-M model] [-E effort] [-B branch] [-f] [-n] [-C] [-s session_id] <src_dir> [handoff.md]
+# usage: transfer.sh [-H host] [-m mode] [-b] [-M model] [-E effort] [-B branch] [-f] [-n] [-C] [-N] [-s session_id] <src_dir> [handoff.md]
+#        transfer.sh [-H host] [-n] -K          # only sync the user-level Claude config, then exit
 #   -H host  ssh host (default: mini)
 #   -m mode  remote claude --permission-mode (default: auto)
 #   -b       shorthand for -m bypassPermissions
@@ -12,6 +13,8 @@
 #   -f       force: skip the 2 GiB payload guard
 #   -n       dry run: print the plan (MODE=resume|copy and why), change nothing remotely
 #   -C       copy mode only: fresh remote session seeded with handoff.md (never resume)
+#   -N       don't sync the user-level Claude config (see Config below)
+#   -K       config sync only (no src_dir, no launch); with -n it only reports
 #   -s id    session to resume (default: $CLAUDE_CODE_SESSION_ID)
 #   handoff.md is required unless -n.
 #
@@ -30,8 +33,13 @@
 #     Local uncommitted or unpushed work does NOT travel (LOCAL_DIRTY/LOCAL_AHEAD report it).
 #   copy (fallback, or -C): ~/transfer/<name>-<ts>/ + a fresh session whose first prompt is
 #     handoff.md. Memory is copied to the new path's project dir (best effort).
-# Memory: in resume/sync mode it is synced both ways first (remote→local, then local→remote,
-# both with --update: the newer copy of each file wins, nothing is deleted).
+# Config: before launching, ~/.claude is synced on both ends with
+# ~/.claude/scripts/claude-config-sync.sh (git, private repo claude-config; what is tracked
+# is the allowlist in ~/.claude/.gitignore: CLAUDE.md, settings.json with hooks, rules,
+# reference, scripts, skills, mods, projects/*/memory; never sessions or credentials).
+# A secret hit or a rebase conflict stops the transfer. Plugin differences are reported.
+# Memory: travels with the config repo. Without it, memory files missing on the remote are
+# copied (--ignore-existing; openrsync ignores --update, so nothing is ever overwritten).
 #
 # Remote layout: <dest>/.transfer/  (TRANSFER.md, PROMPT.md, run.sh, id, mode, session, base; git-excluded)
 # Nothing is cleaned up automatically: the remote copy stays where it is so work can go on
@@ -48,17 +56,19 @@ DRY=0
 COPY_ONLY=0
 SID=${CLAUDE_CODE_SESSION_ID:-}
 BRANCH=
+NO_CONFIG=0
+CONFIG_ONLY=0
 MAX_BYTES=$((2 * 1024 * 1024 * 1024))
 REMOTE_PATH='export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";'
 
 log() { printf '[transfer %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
-usage() { sed -n '5,17p' "$0" >&2; exit 2; }
+usage() { sed -n '5,21p' "$0" >&2; exit 2; }
 q() { printf '%q' "$1"; } # quote one arg for the remote shell (openrsync has no --protect-args)
 # git remote URL -> host/owner/repo, so git@host:o/r.git and https://host/o/r match
 repo_id() { sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#:#/#; s#\.git$##; s#/+$##' <<<"$1" | tr 'A-Z' 'a-z'; }
 
-while getopts "H:m:bM:E:B:fnCs:" o; do
+while getopts "H:m:bM:E:B:fnCNKs:" o; do
   case $o in
     H) HOST=$OPTARG ;;
     m) MODE=$OPTARG ;;
@@ -69,11 +79,14 @@ while getopts "H:m:bM:E:B:fnCs:" o; do
     f) FORCE=1 ;;
     n) DRY=1 ;;
     C) COPY_ONLY=1 ;;
+    N) NO_CONFIG=1 ;;
+    K) CONFIG_ONLY=1 ;;
     s) SID=$OPTARG ;;
     *) usage ;;
   esac
 done
 shift $((OPTIND - 1))
+if ((CONFIG_ONLY)); then set -- "$HOME/.claude"; fi # placeholder; -K never ships a project
 [[ $# -ge 1 && $# -le 2 ]] || usage
 
 case $EFFORT in '' | low | medium | high | xhigh | max) ;; *) die "bad -E effort: $EFFORT (low|medium|high|xhigh|max)" ;; esac
@@ -85,7 +98,7 @@ BRANCH_RE='^[A-Za-z0-9._/-]*$'
 SRC=$(cd "$1" && pwd -P)
 HANDOFF=${2:-}
 [[ $SRC != "$HOME" && $SRC != / ]] || die "refusing to ship $SRC as a whole"
-if ((DRY == 0)); then
+if ((DRY == 0 && CONFIG_ONLY == 0)); then
   [[ -n $HANDOFF && -s $HANDOFF ]] || die "handoff file missing or empty: ${HANDOFF:-<none>}"
 fi
 
@@ -100,6 +113,42 @@ EXCLUDES=(--exclude .venv --exclude venv --exclude node_modules --exclude __pyca
   --exclude .next --exclude DerivedData --exclude .transfer)
 
 ssh -o ConnectTimeout=10 -o BatchMode=yes "$HOST" true || die "ssh $HOST unreachable"
+
+# --- user-level Claude config sync (see Config in the header) ------------------------------
+SYNC=.claude/scripts/claude-config-sync.sh
+sync_config() { # $1 = 1 for a dry run (report only)
+  local dry=$1 flag="" lp rp only missing
+  ((dry)) && flag=-n
+  if [[ -d $HOME/.claude/.git && -x $HOME/$SYNC ]]; then
+    "$HOME/$SYNC" $flag || die "config sync failed here; fix ~/.claude (see message above) or pass -N"
+  else
+    log "config: ~/.claude is not a claude-config checkout here; skipped"
+  fi
+  if ssh "$HOST" "test -d .claude/.git && test -x $SYNC"; then
+    ssh "$HOST" "$REMOTE_PATH $SYNC $flag" || die "config sync failed on $HOST; fix ~/.claude there or pass -N"
+  else
+    log "config: ~/.claude on $HOST is not a claude-config checkout; skipped (bootstrap it: see $SYNC)"
+  fi
+  # plugins: Claude Code manages ~/.claude/plugins itself, so differences are only reported
+  lp=$(jq -r '.plugins|keys[]' "$HOME/.claude/plugins/installed_plugins.json" 2>/dev/null | sort || true)
+  rp=$(ssh "$HOST" "cat .claude/plugins/installed_plugins.json 2>/dev/null" | jq -r '.plugins|keys[]' 2>/dev/null | sort || true)
+  only=$(comm -23 <(echo "$lp") <(echo "$rp") | grep . | tr '\n' ' ' || true)
+  [[ -n $only ]] && log "config: plugins installed here but not on $HOST (run 'claude plugin install <p>' there): $only"
+  only=$(comm -13 <(echo "$lp") <(echo "$rp") | grep . | tr '\n' ' ' || true)
+  [[ -n $only ]] && log "config: plugins installed only on $HOST: $only"
+  # hook/statusline commands in settings.json must exist on the remote
+  missing=$(jq -r '.. | objects | select(has("command")) | .command' "$HOME/.claude/settings.json" 2>/dev/null \
+    | grep -oE '(/Users/[^ "'"'"']+|~/[^ "'"'"']+)' | sort -u \
+    | ssh "$HOST" 'while read -r p; do p=${p/#\~/$HOME}; [ -e "$p" ] || echo "$p"; done' || true)
+  [[ -n $missing ]] && log "config: WARNING hook/statusline paths missing on $HOST: $(tr '\n' ' ' <<<"$missing")"
+  return 0
+}
+if ((CONFIG_ONLY)); then
+  sync_config "$DRY"
+  echo "HOST=$HOST"
+  echo "CONFIG=$( ((DRY)) && echo dry-run || echo synced)"
+  exit 0
+fi
 
 # --- local session lookup ---------------------------------------------------------------
 SESSION_FILE="" SLUG_DIR="" SESSION_CWD="" SESSION_CWD_P=""
@@ -232,6 +281,7 @@ emit_common() {
 }
 
 if ((DRY)); then
+  ((NO_CONFIG == 0)) && sync_config 1
   log "dry run: nothing sent"
   emit_common
   echo "DRY=1"
@@ -329,16 +379,13 @@ scp -q "$HANDOFF" "$HOST:$(q "$DEST/.transfer/TRANSFER.md")"
 # keep .transfer/ out of the remote git status
 ssh "$HOST" "cd $(q "$DEST") && if [ -d .git ]; then mkdir -p .git/info && { grep -qx '.transfer/' .git/info/exclude 2>/dev/null || echo .transfer/ >> .git/info/exclude; }; fi"
 
+if ((NO_CONFIG == 0)); then sync_config 0; fi
+
 # --- session transcript + memory: as late as possible so the copy holds the most context ---
 ssh "$HOST" "mkdir -p $(q "$RSLUG")"
-if [[ -n $SLUG_DIR && -d $SLUG_DIR/memory ]]; then
-  if [[ $KIND == resume || $KIND == sync ]]; then
-    # same slug on both ends: pull remote-only/newer memory home first, so this is a two-way sync
-    PULLED=$(rsync -a --update --itemize-changes "$HOST:$(q "$RSLUG/memory")/" "$SLUG_DIR/memory/" 2>/dev/null | awk '/^>f/ {print $2}' || true)
-    [[ -n $PULLED ]] && log "memory pulled from $HOST (newer there): $(tr '\n' ' ' <<<"$PULLED")"
-  fi
-  # --update: never clobber memory files that are newer on the remote
-  rsync -a --update "$SLUG_DIR/memory" "$HOST:$(q "$RSLUG")/"
+if [[ -n $SLUG_DIR && -d $SLUG_DIR/memory && ! -d $HOME/.claude/.git ]]; then
+  # no config repo: copy only memory files the remote lacks (openrsync ignores --update)
+  rsync -a --ignore-existing "$SLUG_DIR/memory" "$HOST:$(q "$RSLUG")/"
 fi
 if [[ $KIND == resume || $KIND == sync ]]; then
   rsync -a "$SESSION_FILE" "$HOST:$(q "$RSLUG")/"
@@ -392,5 +439,5 @@ if [[ $KIND == resume || $KIND == sync ]]; then
   # The remote copy of the transcript is a superset of the local one up to the transfer point;
   # pulling it back overwrites the local tail written after the copy (this report turn).
   # include filters: <id>/ may not exist (no subagents yet), and other sessions in the slug dir stay put
-  echo "PULLBACK=rsync -a --include=$(q "$SID.jsonl") --include=$(q "$SID/") --include=$(q "$SID/**") --exclude='*' $HOST:$(q "$RSLUG")/ $(q "$SLUG_DIR")/ && rsync -a --update --include=memory/ --include='memory/**' --exclude='*' $HOST:$(q "$RSLUG")/ $(q "$SLUG_DIR")/"
+  echo "PULLBACK=rsync -a --include=$(q "$SID.jsonl") --include=$(q "$SID/") --include=$(q "$SID/**") --exclude='*' $HOST:$(q "$RSLUG")/ $(q "$SLUG_DIR")/ && rsync -a --ignore-existing --include=memory/ --include='memory/**' --exclude='*' $HOST:$(q "$RSLUG")/ $(q "$SLUG_DIR")/"
 fi

@@ -2,6 +2,12 @@
 
 All notable changes to this skill are documented here. Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2026-11-01
+### Added
+- Config sync: before the transcript is copied, `~/.claude` is synced on both machines through git (`~/.claude/scripts/claude-config-sync.sh`, private repo claude-config, allowlist `.gitignore`, secret scan). `-K` syncs config only, `-N` skips it. Plugin differences and missing hook paths are reported.
+### Fixed
+- Memory is never overwritten by rsync: macOS openrsync ignores `--update`, so the two-way memory sync from 1.2.0 could replace newer files with older ones. Memory now travels with the config repo; without it only missing files are copied (`--ignore-existing`), also in the PULLBACK line.
+
 ## [1.2.0] - 2026-11-01
 ### Added
 - Sync mode: when the project path already exists on the remote as a checkout of the same repo, resume the same session there instead of falling back to copy mode. Tracked remote changes are saved on `wip/transfer-<ts>`, then the branch (`-B`, default the local one) is fast-forwarded to `origin`.

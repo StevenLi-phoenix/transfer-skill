@@ -18,6 +18,8 @@ Stop working here and continue the task on the Mac mini (`ssh mini`). By default
 /transfer --effort <lvl>     # (-E) remote --effort: low|medium|high|xhigh|max (default: remote's own)
 /transfer --branch <b>       # (-B) sync mode: branch the remote checkout is fast-forwarded to (default: local current branch)
 /transfer --copy             # (-C) fresh remote session from the handoff instead of resuming
+/transfer --no-config        # (-N) skip the ~/.claude config sync
+/transfer --config-only      # (-K) only sync ~/.claude on both machines, launch nothing
 /transfer --force            # allow payload > 2 GiB
 ```
 
@@ -28,7 +30,7 @@ Stop working here and continue the task on the Mac mini (`ssh mini`). By default
 | Remote path | same absolute path as here, created fresh | same absolute path, the remote's **own** checkout | `~/transfer/<name>-<ts>/` |
 | Code | rsync of the working tree (incl. `.git`, uncommitted, untracked) | **no rsync**: tracked remote changes go to `wip/transfer-<ts>`, then `<branch>` is fast-forwarded to `origin/<branch>`; remote untracked files stay | rsync |
 | Conversation | **same session**: `<id>.jsonl` + `<id>/` (subagents, tool-results) copied to the same `~/.claude/projects/<slug>/`, then `claude --resume <id>` | same as resume | new session; first prompt is the full handoff |
-| Memory | two-way `--update` sync (newer file wins, nothing deleted) | same as resume | copied to the new slug (best effort) |
+| Memory | travels with the config repo (below); without it, only files missing on the remote are copied | same as resume | copied to the new slug (best effort) |
 | First prompt | short preamble telling it that it moved and to read `.transfer/TRANSFER.md` | same, plus the synced branch and any wip branch | the handoff itself |
 | Needs | session cwd is the source dir or inside it (no symlinks); the path does **not** exist on the remote yet and can be created | same session-cwd rule; remote `origin` is the same repo (ssh/https forms match); `origin/<branch>` exists; the fast-forward is clean | nothing |
 
@@ -37,6 +39,14 @@ Resume and sync need the identical path because Claude Code finds sessions by th
 **Sync mode ships only what is pushed.** Local uncommitted changes (`LOCAL_DIRTY=1`) and unpushed commits (`LOCAL_AHEAD>0`) stay here. If they matter, commit and push them (only when the user allowed pushing), or use `-C`. If the remote branch has diverged or untracked files block the fast-forward, the script stops before launching anything; report the error rather than forcing it.
 
 Nothing is cleaned up automatically. The remote copy stays where it is so the user can keep working there.
+
+## Config sync (CLAUDE.md, settings + hooks, rules, skills, memory)
+
+`~/.claude` on each machine is a checkout of the private repo `StevenLi-phoenix/claude-config`. Its `.gitignore` is an allowlist: `CLAUDE.md`, `settings.json` (hooks included), `rules/`, `reference/`, `scripts/`, `skills/` (minus claude.ai-managed `synced/`), `mods/`, `agents/`, `commands/` and `projects/*/memory/`. Sessions, history, caches, plugin installs, backups and anything credential-like (`credentials/`, `.env`, `*.key`, `*.pem`, `secrets*`) stay out. Skills and mods that are their own git repos are listed in `~/.claude/.repos` and cloned or fast-forwarded separately.
+
+Before the transcript is copied, the script runs `~/.claude/scripts/claude-config-sync.sh` here and then on the remote: commit local changes, scan them for secret-looking strings (known false positives in `~/.claude/.secretscan-allow`), `pull --rebase`, push, update the nested repos. A secret hit or a rebase conflict stops the transfer before anything launches: show the user the message and resolve it with them. Installed plugins are not synced (Claude Code manages `~/.claude/plugins`); the script reports differences, and hook paths from `settings.json` that are missing on the remote. `-K` runs just this sync; `-N` skips it.
+
+Don't use rsync `--update` on macOS: the bundled openrsync ignores it and overwrites newer files.
 
 ## Sequence
 

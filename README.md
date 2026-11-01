@@ -10,6 +10,7 @@ Your laptop is about to sleep, or you're about to leave the house, and Claude is
 - **Your working tree as-is.** `.git` and uncommitted or untracked work go along. Regenerable dirs (`node_modules`, `.venv`, caches) are skipped.
 - **Pick the brain on the other side.** `-M opus -E xhigh` launches the remote session with a specific model and effort level.
 - **Reuses a checkout that is already there.** If the remote already has the project at the same path as a git checkout of the same repo, it saves that checkout's uncommitted changes on a `wip/transfer-<ts>` branch, fast-forwards the branch to `origin`, and resumes the same session there (sync mode). Memory is synced both ways.
+- **Same Claude config on both ends.** `~/.claude` (CLAUDE.md, settings and hooks, rules, skills, memory) is a git checkout of a private config repo on each machine and is synced through git before every transfer, with a secret scan; sessions and credentials stay out. `-K` syncs config only.
 - **Safe by default.** It never rsyncs into an existing remote directory; anything else falls back to copy mode. The payload has a 2 GiB guard, and remote disk space is checked before anything is sent. Nothing local is changed.
 - **Copy-mode fallback.** When the same path can't be used, a fresh remote session starts from a handoff brief that Claude writes before leaving.
 

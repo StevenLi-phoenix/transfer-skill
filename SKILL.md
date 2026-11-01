@@ -16,20 +16,25 @@ Stop working here and continue the task on the Mac mini (`ssh mini`). By default
 /transfer --mode <m>         # remote --permission-mode (auto|acceptEdits|bypassPermissions|manual|plan)
 /transfer --model <m>        # (-M) remote --model, e.g. opus / sonnet / fable or a full id (default: remote's own)
 /transfer --effort <lvl>     # (-E) remote --effort: low|medium|high|xhigh|max (default: remote's own)
+/transfer --branch <b>       # (-B) sync mode: branch the remote checkout is fast-forwarded to (default: local current branch)
 /transfer --copy             # (-C) fresh remote session from the handoff instead of resuming
 /transfer --force            # allow payload > 2 GiB
 ```
 
 ## Modes (the script picks; `MODE=` in its output says which)
 
-| | resume (default) | copy (fallback, or `-C`) |
-|---|---|---|
-| Remote path | same absolute path as here | `~/transfer/<name>-<ts>/` |
-| Conversation | **same session**: `<id>.jsonl` + `<id>/` (subagents, tool-results) + `memory/` copied to the same `~/.claude/projects/<slug>/`, then `claude --resume <id>` | new session; first prompt is the full handoff |
-| First prompt | short preamble telling it that it moved and to read `.transfer/TRANSFER.md` | the handoff itself |
-| Needs | session cwd is the source dir or inside it (no symlinks); the path does **not** exist on the remote yet and can be created | nothing |
+| | resume (default) | sync (path exists remotely as a git checkout) | copy (fallback, or `-C`) |
+|---|---|---|---|
+| Remote path | same absolute path as here, created fresh | same absolute path, the remote's **own** checkout | `~/transfer/<name>-<ts>/` |
+| Code | rsync of the working tree (incl. `.git`, uncommitted, untracked) | **no rsync**: tracked remote changes go to `wip/transfer-<ts>`, then `<branch>` is fast-forwarded to `origin/<branch>`; remote untracked files stay | rsync |
+| Conversation | **same session**: `<id>.jsonl` + `<id>/` (subagents, tool-results) copied to the same `~/.claude/projects/<slug>/`, then `claude --resume <id>` | same as resume | new session; first prompt is the full handoff |
+| Memory | two-way `--update` sync (newer file wins, nothing deleted) | same as resume | copied to the new slug (best effort) |
+| First prompt | short preamble telling it that it moved and to read `.transfer/TRANSFER.md` | same, plus the synced branch and any wip branch | the handoff itself |
+| Needs | session cwd is the source dir or inside it (no symlinks); the path does **not** exist on the remote yet and can be created | same session-cwd rule; remote `origin` is the same repo (ssh/https forms match); `origin/<branch>` exists; the fast-forward is clean | nothing |
 
-Resume needs the identical path because Claude Code finds sessions by the project slug derived from the cwd, and the transcript is full of absolute paths that must stay valid. The script never merges into an existing remote directory. If the path already exists there (e.g. from an earlier transfer), it falls back to copy mode and prints the reason in `REASON=`. When resume is what the user wants, tell them about the existing dir; don't delete it yourself.
+Resume and sync need the identical path because Claude Code finds sessions by the project slug derived from the cwd, and the transcript is full of absolute paths that must stay valid. The script never rsyncs into an existing remote directory. When the path exists and is a checkout of the same repo, it uses sync mode; otherwise it falls back to copy mode and prints the reason in `REASON=`. Don't delete a remote directory yourself.
+
+**Sync mode ships only what is pushed.** Local uncommitted changes (`LOCAL_DIRTY=1`) and unpushed commits (`LOCAL_AHEAD>0`) stay here. If they matter, commit and push them (only when the user allowed pushing), or use `-C`. If the remote branch has diverged or untracked files block the fast-forward, the script stops before launching anything; report the error rather than forcing it.
 
 Nothing is cleaned up automatically. The remote copy stays where it is so the user can keep working there.
 
@@ -45,14 +50,14 @@ The project root the task is in: `git rev-parse --show-toplevel` from the cwd, e
 
 ### 3. Probe
 ```bash
-~/.claude/skills/transfer/transfer.sh -n [-H host] [-C] <src_dir>
+~/.claude/skills/transfer/transfer.sh -n [-H host] [-B branch] [-C] <src_dir>
 ```
-A dry run that sends nothing. It prints `MODE=resume|copy`, `REASON=` (when it falls back), the sizes, and the remote dest. The session id defaults to `$CLAUDE_CODE_SESSION_ID`, which the Bash tool environment provides. Pass `-s <id>` only to move a different session.
+A dry run that sends nothing. It prints `MODE=resume|sync|copy`, `REASON=` (when it falls back), the sizes, and the remote dest. The session id defaults to `$CLAUDE_CODE_SESSION_ID`, which the Bash tool environment provides. Pass `-s <id>` only to move a different session.
 
 ### 4. Write the handoff
 Write `<scratchpad>/TRANSFER.md` (scratchpad dir from the system prompt; else `/tmp`). Never put secret values in it (`.env` files ship via rsync without being read).
 
-- **Resume mode:** the remote session already has the whole conversation, so keep it short. Cover only what the history can't tell it:
+- **Resume/sync mode:** the remote session already has the whole conversation, so keep it short. Cover only what the history can't tell it:
 
   ```
   # Transfer: <brief title>
@@ -78,7 +83,7 @@ Write `<scratchpad>/TRANSFER.md` (scratchpad dir from the system prompt; else `/
 
 ### 5. Ship and launch
 ```bash
-~/.claude/skills/transfer/transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-C] [-f] <src_dir> <scratchpad>/TRANSFER.md
+~/.claude/skills/transfer/transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-B branch] [-C] [-f] <src_dir> <scratchpad>/TRANSFER.md
 ```
 The script:
 - probes the remote (read-only), picks the mode, and checks the payload size (2 GiB guard) and remote disk (payload + 5 GiB)

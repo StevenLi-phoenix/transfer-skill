@@ -9,7 +9,8 @@ Your laptop is about to sleep, or you're about to leave the house, and Claude is
 - **Same session, not a summary.** The transcript (`<id>.jsonl`, subagent logs, tool results) and project memory are copied next to the project. The remote then runs `claude --resume <id>`.
 - **Your working tree as-is.** `.git` and uncommitted or untracked work go along. Regenerable dirs (`node_modules`, `.venv`, caches) are skipped.
 - **Pick the brain on the other side.** `-M opus -E xhigh` launches the remote session with a specific model and effort level.
-- **Safe by default.** It never merges into an existing remote directory, so it falls back to copy mode instead. The payload has a 2 GiB guard, and remote disk space is checked before anything is sent. Nothing local is changed.
+- **Reuses a checkout that is already there.** If the remote already has the project at the same path as a git checkout of the same repo, it saves that checkout's uncommitted changes on a `wip/transfer-<ts>` branch, fast-forwards the branch to `origin`, and resumes the same session there (sync mode). Memory is synced both ways.
+- **Safe by default.** It never rsyncs into an existing remote directory; anything else falls back to copy mode. The payload has a 2 GiB guard, and remote disk space is checked before anything is sent. Nothing local is changed.
 - **Copy-mode fallback.** When the same path can't be used, a fresh remote session starts from a handoff brief that Claude writes before leaving.
 
 ## Install
@@ -31,14 +32,15 @@ In Claude Code:
 /transfer --mode <m>         # remote --permission-mode (auto|acceptEdits|bypassPermissions|manual|plan)
 /transfer --model opus       # remote --model
 /transfer --effort xhigh     # remote --effort (low|medium|high|xhigh|max)
+/transfer --branch main      # sync mode: branch to fast-forward the remote checkout to
 /transfer --copy             # fresh remote session from the handoff instead of resuming
 ```
 
 The script on its own:
 
 ```sh
-transfer.sh -n <src_dir>                                         # dry run: prints MODE=resume|copy and why
-transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-C] [-f] <src_dir> TRANSFER.md
+transfer.sh -n <src_dir>                                         # dry run: prints MODE=resume|sync|copy and why
+transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-B branch] [-C] [-f] <src_dir> TRANSFER.md
 ```
 
 It prints `HOST= MODE= DEST= SESSION= STATE= ATTACH= PULLBACK=` lines. To watch the remote session, run the `ATTACH` command (detach with `Ctrl-b d`). The `PULLBACK` command brings the remote transcript home, so you can resume the conversation locally again later.

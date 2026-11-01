@@ -2,6 +2,11 @@
 
 All notable changes to this skill are documented here. Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] - 2026-11-01
+### Added
+- Sync mode: when the project path already exists on the remote as a checkout of the same repo, resume the same session there instead of falling back to copy mode. Tracked remote changes are saved on `wip/transfer-<ts>`, then the branch (`-B`, default the local one) is fast-forwarded to `origin`.
+- Memory is synced both ways in resume and sync mode (remote-only or newer files come home first).
+
 ## [1.1.1] - 2026-10-21
 ### Fixed
 - SKILL.md: Remote Control after a resume-mode transfer. The remote joins the same RC entry (same `cse_…` id) as the local process, so the user must `/exit` the local session for RC to reach the remote. Documented how to verify this and how to avoid the Disconnect trap.

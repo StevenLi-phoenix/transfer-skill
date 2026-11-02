@@ -16,6 +16,7 @@ Stop working here and continue the task on the Mac mini (`ssh mini`). By default
 /transfer --mode <m>         # remote --permission-mode (auto|acceptEdits|bypassPermissions|manual|plan)
 /transfer --model <m>        # (-M) remote --model, e.g. opus / sonnet / fable or a full id (default: remote's own)
 /transfer --effort <lvl>     # (-E) remote --effort: low|medium|high|xhigh|max (default: remote's own)
+/transfer --inherit          # (-I) use THIS session's model and effort (-M local -E local); use it when the user says "inherit/继承本地的 model 和 effort"
 /transfer --branch <b>       # (-B) sync mode: branch the remote checkout is fast-forwarded to (default: local current branch)
 /transfer --copy             # (-C) fresh remote session from the handoff instead of resuming
 /transfer --no-config        # (-N) skip the ~/.claude config sync
@@ -52,17 +53,20 @@ Don't use rsync `--update` on macOS: the bundled openrsync ignores it and overwr
 
 ### 1. Abort locally
 - Make **no further progress** on the task. Don't finish "just one more step".
-- Stop background work **this session** started (TaskStop on its own tasks/agents; kill only PIDs you launched, after checking the command line). Never touch other sessions' processes.
-- Do not commit, stash, reset or clean anything locally. The rsync ships the working tree as it is, and the local copy stays untouched as the fallback.
+- Stop background work **this session started on this machine**: Monitor watchers, local `ssh ... tail -F` follows, background Bash, its own agents (TaskStop; it is a deferred tool, load it with ToolSearch first; kill only PIDs you launched, after checking the command line). Never touch other sessions' processes.
+- **Services that run on another host and are the task's subject stay up** (a game server, a training job, a systemd unit on a GPU box). They are not "local background work": stopping them would undo the task. Record each in the handoff (host, unit or container name, how to check it, how to stop it) and say that the monitors you just stopped must be re-armed on the remote.
+- Do not commit, stash, reset or clean anything locally **as part of the transfer**. The rsync ships the working tree as it is, and the local copy stays untouched as the fallback. (Committing finished work earlier in the session is normal.)
 
 ### 2. Pick the source dir
 The project root the task is in: `git rev-parse --show-toplevel` from the cwd, else the cwd. If that's `$HOME` or `/`, stop and ask which directory to ship.
 
+**Check the session cwd before choosing.** Resume and sync need the session's *starting* directory (the first `cwd` in the transcript, not the "Primary working directory" that environment updates show later) to be the source dir or inside it. If the task lives in a subdirectory or clone of the start directory (typical for sessions started in `/tmp/<x>` that then clone a repo), shipping the project root can only give copy mode and the conversation is lost. Decide on purpose: either ship the session cwd itself (resume keeps the history; the path must not exist on the remote), or accept copy mode and say so in the report. The dry run prints this as `REASON=`.
+
 ### 3. Probe
 ```bash
-~/.claude/skills/transfer/transfer.sh -n [-H host] [-B branch] [-C] <src_dir>
+~/.claude/skills/transfer/transfer.sh -n [-H host] [-M model] [-E effort | -I] [-m mode] [-B branch] [-C] <src_dir>
 ```
-A dry run that sends nothing. It prints `MODE=resume|sync|copy`, `REASON=` (when it falls back), the sizes, and the remote dest. The session id defaults to `$CLAUDE_CODE_SESSION_ID`, which the Bash tool environment provides. Pass `-s <id>` only to move a different session.
+Probe with the final flags: the `src=... model=... effort=...` log line shows what will launch (`-I` resolves to concrete values there; check them). A dry run that sends nothing. It prints `MODE=resume|sync|copy`, `REASON=` (when it falls back), the sizes, and the remote dest. The session id defaults to `$CLAUDE_CODE_SESSION_ID`, which the Bash tool environment provides. Pass `-s <id>` only to move a different session.
 
 ### 4. Write the handoff
 Write `<scratchpad>/TRANSFER.md` (scratchpad dir from the system prompt; else `/tmp`). Never put secret values in it (`.env` files ship via rsync without being read).
@@ -78,6 +82,9 @@ Write `<scratchpad>/TRANSFER.md` (scratchpad dir from the system prompt; else `/
   ## What differs on the remote
   <runtime versions that differ, missing deps (node_modules/.venv were not copied → recreate), network/quotas, anything machine-specific you noticed during the probe>
 
+  ## Still running elsewhere / monitors to re-arm
+  <services on other hosts (host, unit/container, check and stop commands); the watchers stopped here and the exact commands to start them again>
+
   ## Next steps
   <prioritized, concrete; where the conversation left off>
 
@@ -89,11 +96,11 @@ Write `<scratchpad>/TRANSFER.md` (scratchpad dir from the system prompt; else `/
   <the /transfer <hint>, if any>
   ```
 
-- **Copy mode:** the remote session has **zero** history, so this file is its whole world. Use the full structure: Origin, Goal (quote the user's request), Done so far, Current state (incl. the last error verbatim), Tried and failed, Next steps, Remote environment notes, User's extra instructions. Be specific: absolute paths, exact commands, decisions and their reasons. Durable facts from this project's memory (`~/.claude/projects/<slug>/memory/`) are copied to the new path's project dir on a best-effort basis, but restate the important ones.
+- **Copy mode:** the remote session has **zero** history, so this file is its whole world. Use the full structure: Origin, Goal (quote the user's request, and every later user message that changed it), Done so far, Current state (incl. the last error verbatim), What is running where (hosts, units, ports, how to check/stop, expiry timers such as an auto-suspend deferral), Monitors to re-arm (exact commands), Tried and failed, Open decisions (what the user was asked and has not answered), Next steps, Remote environment notes (versions, PATH, which hosts it can reach and how), User's extra instructions. State which copy is the source of truth for the code and how changes get deployed. Be specific: absolute paths, exact commands, decisions and their reasons. Durable facts from this project's memory (`~/.claude/projects/<slug>/memory/`) are copied to the new path's project dir on a best-effort basis, but restate the important ones.
 
 ### 5. Ship and launch
 ```bash
-~/.claude/skills/transfer/transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-B branch] [-C] [-f] <src_dir> <scratchpad>/TRANSFER.md
+~/.claude/skills/transfer/transfer.sh [-H host] [-m mode] [-M model] [-E effort | -I] [-B branch] [-C] [-f] <src_dir> <scratchpad>/TRANSFER.md
 ```
 The script:
 - probes the remote (read-only), picks the mode, and checks the payload size (2 GiB guard) and remote disk (payload + 5 GiB)
@@ -118,10 +125,20 @@ Brief, in the user's language:
 
 Then end the turn. Don't keep working on the task locally.
 
+## After the transfer: the user may keep talking to this session
+The user can still type here. Don't do the task here; relay it, so two sessions never edit the same code.
+- Put the remote session's instruction in a file and paste it into its tmux pane (a one-line `send-keys` mangles long text):
+  `scp msg.txt <host>:/tmp/msg.txt && ssh <host> 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; tmux load-buffer -b relay /tmp/msg.txt && tmux paste-buffer -b relay -t <SESSION> && sleep 1 && tmux send-keys -t <SESSION> Enter'`
+  Quote the user's words, say what you already verified, and what the remote owns now. Check the pane afterwards (`tmux capture-pane -p -t <SESSION> -S -15`): a busy session queues the message and reads it after its current step.
+- Work that was finished here after the handoff goes over as a patch, not as files: commit it locally, `git format-patch -1 --stdout > x.patch`, `scp` it, and tell the remote to `git am --3way x.patch`.
+- Small read-only checks here are fine (probing a service, reading docs, testing a hypothesis in an isolated sandbox). Anything that changes the shared target, or the code the remote is editing, goes through the remote.
+
 ## Gotchas
 - The last tool call before the copy (the transfer itself) shows as `Interrupted` in the resumed remote session. The preamble tells it this is expected.
 - Claude's trust and bypass dialogs list "No, exit" first and can default to it, so a plain Enter exits. The script sends Down+Enter once per dialog.
 - Non-interactive ssh on the mini lacks `~/.local/bin` and `/opt/homebrew/bin` in PATH. The script prefixes them on every remote command.
 - macOS ships openrsync (2.6.9-compatible): there's no `--protect-args`, so remote paths are passed through `printf %q`. `/bin/bash` is 3.2, and the script stays compatible with it.
 - A tool call the user rejects mid-run may already have executed. Check `tmux ls` on the remote before assuming nothing launched.
+- `-I` reads the model from the transcript and the effort from `settings.json` (`modelSettings.<model>.effortLevel`, else `effortLevel`). An effort changed with `/effort` for this session only is not in the file; pass `-E` then.
+- A reply to the user right after the transfer should state the resolved model/effort, the mode and why, and which services keep running on which host.
 - Old copy-mode leftovers under `~/transfer/` on the mini are not cleaned automatically any more. List them with `ssh mini 'du -sh ~/transfer/*'` and remove them by hand when the user asks.

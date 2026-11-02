@@ -2,13 +2,16 @@
 # transfer.sh — move the current Claude Code task to a remote host and keep it running
 # there inside tmux.
 #
-# usage: transfer.sh [-H host] [-m mode] [-b] [-M model] [-E effort] [-B branch] [-f] [-n] [-C] [-N] [-s session_id] <src_dir> [handoff.md]
+# usage: transfer.sh [-H host] [-m mode] [-b] [-M model] [-E effort] [-I] [-B branch] [-f] [-n] [-C] [-N] [-s session_id] <src_dir> [handoff.md]
 #        transfer.sh [-H host] [-n] -K          # only sync the user-level Claude config, then exit
 #   -H host  ssh host (default: mini)
 #   -m mode  remote claude --permission-mode (default: auto)
 #   -b       shorthand for -m bypassPermissions
-#   -M model remote claude --model (alias like opus/sonnet/fable or a full id; default: remote's own)
-#   -E lvl   remote claude --effort: low|medium|high|xhigh|max (default: remote's own)
+#   -M model remote claude --model (alias like opus/sonnet/fable or a full id; default: remote's own; `local` = this session's model)
+#   -E lvl   remote claude --effort: low|medium|high|xhigh|max (default: remote's own; `local` = this session's effort)
+#   -I       shorthand for -M local -E local. The model is the last one in this session's transcript; the effort is
+#            settings.json modelSettings.<model>.effortLevel, else effortLevel. A /effort override that was not saved
+#            is invisible: pass -E explicitly then.
 #   -B br    sync mode: branch to check out and fast-forward to origin/<br> (default: local current branch)
 #   -f       force: skip the 2 GiB payload guard
 #   -n       dry run: print the plan (MODE=resume|copy and why), change nothing remotely
@@ -68,13 +71,14 @@ q() { printf '%q' "$1"; } # quote one arg for the remote shell (openrsync has no
 # git remote URL -> host/owner/repo, so git@host:o/r.git and https://host/o/r match
 repo_id() { sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#:#/#; s#\.git$##; s#/+$##' <<<"$1" | tr 'A-Z' 'a-z'; }
 
-while getopts "H:m:bM:E:B:fnCNKs:" o; do
+while getopts "H:m:bM:E:IB:fnCNKs:" o; do
   case $o in
     H) HOST=$OPTARG ;;
     m) MODE=$OPTARG ;;
     b) MODE=bypassPermissions ;;
     M) MODEL=$OPTARG ;;
     E) EFFORT=$OPTARG ;;
+    I) MODEL=local EFFORT=local ;;
     B) BRANCH=$OPTARG ;;
     f) FORCE=1 ;;
     n) DRY=1 ;;
@@ -86,6 +90,25 @@ while getopts "H:m:bM:E:B:fnCNKs:" o; do
   esac
 done
 shift $((OPTIND - 1))
+
+# -M local / -E local / -I: copy this session's own model and effort instead of the remote's defaults
+local_model() { # last real model id in this session's transcript
+  local f
+  f=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$SID.jsonl" -print 2>/dev/null | head -1 || true)
+  [[ -n $f ]] || return 1
+  grep -o '"model": *"claude-[^"]*"' "$f" | tail -1 | sed -E 's/^"model": *"//; s/"$//'
+}
+if [[ $MODEL == local || $MODEL == inherit ]]; then
+  [[ -n $SID ]] || die "-M local needs a session id (run inside Claude Code or pass -s)"
+  MODEL=$(local_model || true)
+  [[ -n $MODEL ]] || die "-M local: no model found in the transcript of session $SID"
+fi
+if [[ $EFFORT == local || $EFFORT == inherit ]]; then
+  lm=$MODEL
+  [[ -n $lm ]] || lm=$(local_model || true)
+  EFFORT=$(jq -r --arg m "$lm" '.modelSettings[$m].effortLevel // .effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+  [[ -n $EFFORT ]] || die "-E local: no effortLevel in ~/.claude/settings.json (pass -E explicitly)"
+fi
 if ((CONFIG_ONLY)); then set -- "$HOME/.claude"; fi # placeholder; -K never ships a project
 [[ $# -ge 1 && $# -le 2 ]] || usage
 
@@ -215,7 +238,7 @@ elif [[ -z $SID ]]; then REASON="no session id (pass -s or run inside Claude Cod
 elif [[ -z $SESSION_FILE ]]; then REASON="transcript $SID.jsonl not found under ~/.claude/projects"
 elif [[ -z $SESSION_CWD ]]; then REASON="could not read the session cwd from the transcript"
 elif [[ $SESSION_CWD_P != "$SESSION_CWD" ]]; then REASON="session cwd $SESSION_CWD is missing locally or goes through a symlink"
-elif [[ $SESSION_CWD != "$SRC" && $SESSION_CWD != "$SRC"/* ]]; then REASON="session cwd $SESSION_CWD is outside $SRC"
+elif [[ $SESSION_CWD != "$SRC" && $SESSION_CWD != "$SRC"/* ]]; then REASON="session cwd $SESSION_CWD is outside $SRC (to keep the history, ship $SESSION_CWD itself: resume needs that exact path, and it must not exist on $HOST yet)"
 elif [[ $RPATH == exists && -n $LORIGIN && -n $RORIGIN && $(repo_id "$RORIGIN") == "$(repo_id "$LORIGIN")" && -n $BRANCH ]]; then KIND=sync
 elif [[ $RPATH == exists ]]; then REASON="$SRC already exists on $HOST and is not a git checkout of the same origin (${RORIGIN:-no origin}) with a known branch; resume never merges into existing files"
 elif [[ $RPATH != ok ]]; then REASON="cannot create $SRC on $HOST (${RPATH#unwritable:} not writable)"

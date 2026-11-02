@@ -2,6 +2,12 @@
 
 All notable changes to this skill are documented here. Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] - 2026-11-02
+### Added
+- `-I` (`/transfer --inherit`), `-M local`, `-E local`: launch the remote session with this session's own model (last model in the transcript) and effort (`settings.json` `modelSettings.<model>.effortLevel`, else `effortLevel`).
+- The copy-mode reason now says how to keep the history (ship the session cwd itself).
+- SKILL.md: services on other hosts stay up while local watchers are stopped; check the session cwd before picking the source dir; probe with the final flags; handoff sections for running services, monitors to re-arm and open decisions; a section on relaying later user messages to the remote tmux pane and handing over finished work as a patch.
+
 ## [1.3.0] - 2026-11-01
 ### Added
 - Config sync: before the transcript is copied, `~/.claude` is synced on both machines through git (`~/.claude/scripts/claude-config-sync.sh`, private repo claude-config, allowlist `.gitignore`, secret scan). `-K` syncs config only, `-N` skips it. Plugin differences and missing hook paths are reported.

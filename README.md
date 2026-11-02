@@ -33,6 +33,7 @@ In Claude Code:
 /transfer --mode <m>         # remote --permission-mode (auto|acceptEdits|bypassPermissions|manual|plan)
 /transfer --model opus       # remote --model
 /transfer --effort xhigh     # remote --effort (low|medium|high|xhigh|max)
+/transfer --inherit          # remote uses this session's model and effort (-I)
 /transfer --branch main      # sync mode: branch to fast-forward the remote checkout to
 /transfer --copy             # fresh remote session from the handoff instead of resuming
 ```
@@ -41,7 +42,7 @@ The script on its own:
 
 ```sh
 transfer.sh -n <src_dir>                                         # dry run: prints MODE=resume|sync|copy and why
-transfer.sh [-H host] [-m mode] [-M model] [-E effort] [-B branch] [-C] [-f] <src_dir> TRANSFER.md
+transfer.sh [-H host] [-m mode] [-M model] [-E effort | -I] [-B branch] [-C] [-f] <src_dir> TRANSFER.md
 ```
 
 It prints `HOST= MODE= DEST= SESSION= STATE= ATTACH= PULLBACK=` lines. To watch the remote session, run the `ATTACH` command (detach with `Ctrl-b d`). The `PULLBACK` command brings the remote transcript home, so you can resume the conversation locally again later.
